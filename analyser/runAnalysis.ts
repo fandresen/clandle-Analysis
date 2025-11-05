@@ -4,25 +4,25 @@ import path from 'path';
 import type { Kline } from '../types/kline.js';
 import { config } from '../config.js';
 
-// Interface pour le nouveau rapport
-interface AlternatingAnalysisReport {
-  totalDaysAnalyzed: number;
+// Interface pour les résultats d'UNE journée
+interface DayAnalysisReport {
   totalCandlesAnalyzed: number;
-  
-  /**
-   * Compte les séquences d'alternance pure trouvées, classées par leur longueur.
-   * ex: { "5": 10, "8": 3 } signifie:
-   * 10 séquences de 5 bougies (ex: HBHBH)
-   * 3 séquences de 8 bougies (ex: BHBHBHBH)
-   */
   alternatingSequenceCounts: {
     [length: number]: number;
   };
-  
-  /**
-   * Le nombre total de bougies qui faisaient partie d'une séquence d'alternance.
-   */
   totalCandlesInAlternatingSequences: number;
+}
+
+// Interface pour le rapport final (qui contient tous les jours)
+interface FinalAnalysisReport {
+  summary: {
+    totalDaysAnalyzed: number;
+    symbol: string;
+    analysisDate: string;
+  };
+  dailyResults: {
+    [date: string]: DayAnalysisReport; // Clé par date, ex: "2025-11-04"
+  };
 }
 
 /**
@@ -38,6 +38,15 @@ function getCandleType(kline: Kline): 'H' | 'B' | 'D' {
 }
 
 /**
+ * Extrait la date du nom de fichier (ex: XRPUSDT_1m_2025-11-04.json -> 2025-11-04)
+ */
+function getDateFromFilename(filename: string): string {
+    // Supprime .json, puis prend la dernière partie après un _
+    const parts = filename.replace('.json', '').split('_');
+    return parts[parts.length - 1] || 'unknown-date';
+}
+
+/**
  * Script principal d'analyse
  */
 async function analyzeData() {
@@ -47,19 +56,23 @@ async function analyzeData() {
   const resultsDir = path.resolve(process.cwd(), config.RESULTS_DIR);
 
   // Initialise le rapport final
-  const finalReport: AlternatingAnalysisReport = {
-    totalDaysAnalyzed: 0,
-    totalCandlesAnalyzed: 0,
-    alternatingSequenceCounts: {},
-    totalCandlesInAlternatingSequences: 0,
+  const finalReport: FinalAnalysisReport = {
+    summary: {
+      totalDaysAnalyzed: 0,
+      symbol: config.SYMBOL,
+      analysisDate: new Date().toISOString(),
+    },
+    dailyResults: {},
   };
 
   try {
     const files = await fs.readdir(dataDir);
-    const jsonFiles = files.filter(f => f.endsWith('.json'));
+    const jsonFiles = files.filter(f => 
+      f.endsWith('.json') && f.startsWith(config.SYMBOL)
+    );
 
     if (jsonFiles.length === 0) {
-      console.warn(`No JSON files found in ${dataDir}. Exiting.`);
+      console.warn(`No JSON files found for symbol ${config.SYMBOL} in ${dataDir}. Exiting.`);
       return;
     }
 
@@ -71,42 +84,42 @@ async function analyzeData() {
       const fileContent = await fs.readFile(filePath, 'utf8');
       const klines: Kline[] = JSON.parse(fileContent);
 
-      // 1. Transformer la journée en séquence de H/B/D
+      // --- Début de l'analyse pour CETTE journée ---
+      const dayReport: DayAnalysisReport = {
+        totalCandlesAnalyzed: klines.length,
+        alternatingSequenceCounts: {},
+        totalCandlesInAlternatingSequences: 0,
+      };
+
       const sequence = klines.map(getCandleType).join('');
 
-      finalReport.totalDaysAnalyzed++;
-      finalReport.totalCandlesAnalyzed += sequence.length;
-
-      // 2. Découper la séquence là où l'alternance est rompue (HH, BB, ou D)
-      // Nous utilisons une regex pour "casser" la séquence aux endroits non-alternants.
-      // - "HH+" : Sépare à "HH" ou "HHH"
-      // - "BB+" : Sépare à "BB" ou "BBB"
-      // - "D+"  : Sépare aux Dojis
-      //
-      // Ex: "HHHBHBHBBBHB" deviendra ["HHH", "BHBH", "BBB", "HB"]
+      // Découpe la séquence là où l'alternance est rompue (HH, BB, ou D)
       const parts = sequence.split(/(HH+|BB+|D+)/);
 
-      // 3. Filtrer pour ne garder que les alternances pures
+      // Filtrer pour ne garder que les alternances pures
       const alternatingParts = parts.filter(part => {
-        // Garde la partie si elle n'a PAS de doublons ET n'est pas vide
         return part.length > 0 && !part.includes('HH') && !part.includes('BB') && !part.includes('D');
       });
 
-      // 4. Compter la longueur de ces séquences
+      // Compter la longueur de ces séquences
       for (const seq of alternatingParts) {
         const len = seq.length;
-
-        // On ignore les "H" ou "B" solitaires, car ce ne sont pas des séquences d'alternance.
         if (len > 1) { 
-          finalReport.alternatingSequenceCounts[len] = (finalReport.alternatingSequenceCounts[len] || 0) + 1;
-          finalReport.totalCandlesInAlternatingSequences += len;
+          dayReport.alternatingSequenceCounts[len] = (dayReport.alternatingSequenceCounts[len] || 0) + 1;
+          dayReport.totalCandlesInAlternatingSequences += len;
         }
       }
+      // --- Fin de l'analyse pour CETTE journée ---
+
+      // Ajoute le rapport de la journée au rapport final
+      const dateKey = getDateFromFilename(file);
+      finalReport.dailyResults[dateKey] = dayReport;
+      finalReport.summary.totalDaysAnalyzed++;
     }
 
-    // 5. Sauvegarder le rapport final
+    // 5. Sauvegarder le rapport final unifié
     await fs.mkdir(resultsDir, { recursive: true });
-    const reportFilename = `alternating_report_${new Date().toISOString().split('T')[0]}.json`;
+    const reportFilename = `alternating_report_ALL_DAYS_${new Date().toISOString().split('T')[0]}.json`;
     const reportPath = path.join(resultsDir, reportFilename);
     
     await fs.writeFile(reportPath, JSON.stringify(finalReport, null, 2), 'utf8');
