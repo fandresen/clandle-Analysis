@@ -4,8 +4,8 @@
   "type": "module",
   "main": "index.ts",
   "scripts": {
-    "dev": "ts-node index.ts"
-
+    "get-data": "node --loader ts-node/esm index.ts",
+    "analyze": "node --loader ts-node/esm analyser/runAnalysis.ts"
   },
   "keywords": [],
   "author": "",
@@ -13,7 +13,8 @@
   "description": "",
   "dependencies": {
     "binance": "^3.1.2",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "node": "^25.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
